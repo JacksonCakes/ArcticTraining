@@ -207,25 +207,34 @@ class ArcticLSTMSpeculatorTrainer(SFTTrainer):
     model_factory: ArcticLSTMSpeculatorModelFactory
     checkpoint_engine: Union[DSCheckpointEngine, ArcticLSTMSpeculatorCheckpointEngine]
 
-    def loss(self, batch) -> float:
+    def loss(self, batch) -> torch.Tensor:
         inputs = to_device(batch, self.device)
 
         with torch.no_grad():
             outputs = self.model(**inputs, speculator_return=True)
-            hidden_states = outputs[0]  # b n h
+            hidden_states = outputs[0]  # (b, 1024, h)
+        # TODO: Remove hardcoded indices
+        hidden_states = hidden_states[:, -769:, :]  # (b, 769, h)
 
-        preds = self.model.speculator(
-            hidden_states.detach()[:, : -self.model.speculator.n_predict - 1, :],
-            inputs["input_ids"][:, 1:],
-        )
-        losses = []
+        n_pred = self.model.speculator.n_predict
+        state = hidden_states.detach()[:, : -n_pred - 1, :]  # (b, 768-n_pred, h)
+
+        inds = inputs["input_ids"][:, -768:]  # (b, 768)
+
+        preds = self.model.speculator(state, inds)  # (n_pred, b, state_len, vocab_size)
+
+        labels = inputs["labels"][:, -768:]  # (b, 768)
+
         loss_fn = CrossEntropyLoss()
+        total_loss = 0.0
+        state_len = preds.size(2)
 
-        labels = inputs["labels"]
-        for i in range(preds.size(0)):
-            targ = labels[:, i + 2 : preds.size(2) + i + 2]  # b n
-            loss = loss_fn(preds[i].reshape(-1, preds.size(3)), targ.long().reshape(-1))
-            losses.append(loss)
+        for i in range(n_pred):
+            start = i + 1
+            end = start + state_len
+            targ = labels[:, start:end]  # (b, state_len)
+            pred = preds[i]  # (b, state_len, vocab)
 
-        loss = sum(losses)
-        return loss
+            total_loss += loss_fn(pred.reshape(-1, pred.size(-1)), targ.reshape(-1))
+
+        return total_loss

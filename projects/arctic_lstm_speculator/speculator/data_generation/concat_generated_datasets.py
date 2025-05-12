@@ -38,8 +38,12 @@ all_jsonl_files = list(sorted(glob.glob(os.path.join(data_save_folder_name, "**/
 for f in tqdm(all_jsonl_files):
     for line in open(f):
         data = json.loads(line)
+        inputs = data.pop("input")
         outputs = data.pop("output")
-        assert len(outputs) == 256
+        outputs = inputs + outputs
+        # TODO: Remove hardcode len
+        outputs = outputs[:1024]
+        assert len(outputs) == 1024
         total_data["input_ids"].append(outputs)
         total_data["labels"].append(outputs)
 
